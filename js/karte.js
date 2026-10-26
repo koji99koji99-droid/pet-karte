@@ -14,12 +14,12 @@ export function age(birth, estimated = false) {
 }
 const list = values => values.length ? values.join('') : '<p class="empty">記録はありません。</p>';
 
-export function karteHtml(pet, records) {
+export function karteHtml(pet, records, { visitLimit = 5 } = {}) {
   const sorted = [...records].sort((a, b) => compareRecords(b, a));
   const vaccines = new Map();
   for (const r of sorted.filter(r => r.type === 'vaccine')) if (!vaccines.has(r.vaccineName || '名称未登録')) vaccines.set(r.vaccineName || '名称未登録', r);
   const checkup = sorted.find(r => r.type === 'checkup' && r.tests?.length);
-  const visits = sorted.filter(r => r.type === 'visit').slice(0, 5);
+  const visits = sorted.filter(r => r.type === 'visit').slice(0, visitLimit);
   const hospitals = [...new Set([pet.hospitalName, ...sorted.map(r => r.hospital)].filter(Boolean))];
   const cautions = ['アレルギー', '持病・既往歴', '常用薬'].map((label, i) => {
     const value = [pet.allergies, pet.history, pet.medications][i];
@@ -37,7 +37,7 @@ export function karteHtml(pet, records) {
     </section>
     <section class="karte-block caution"><h3>⚠ 注意事項</h3>${cautions || '<p>特になし（飼い主申告）</p>'}</section>
     <section class="karte-block"><h3>ワクチン履歴</h3>${list([...vaccines].map(([name, r]) => `<p>${esc(name)}：最終 ${esc(r.date)} ／ 次回 ${show(r.nextDate)}</p>`))}</section>
-    <section class="karte-block"><h3>直近の通院（最大5件）</h3>${list(visits.map(r => `<div class="karte-row"><strong>${esc(r.date)}</strong>　${show(r.hospital)}<br>診断：${show(r.diagnosis)}<br>処置：${show(r.treatment)}<br>処方：${show(r.prescription)}</div>`))}</section>
+    <section class="karte-block"><h3>直近の通院（最大${visitLimit}件）</h3>${list(visits.map(r => `<div class="karte-row"><strong>${esc(r.date)}</strong>　${show(r.hospital)}<br>診断：${show(r.diagnosis)}<br>処置：${show(r.treatment)}<br>処方：${show(r.prescription)}</div>`))}</section>
     <section class="karte-block"><h3>最新の検査値</h3>${checkup ? `<p>${esc(checkup.date)}　${show(checkup.hospital)}</p><div class="table-scroll"><table><thead><tr><th>項目</th><th>値</th><th>基準範囲</th></tr></thead><tbody>${checkup.tests.map(t => {
       const n = Number(t.value), low = Number(t.low), high = Number(t.high);
       const lowOut = t.low !== '' && t.low != null && Number.isFinite(n) && Number.isFinite(low) && n < low;

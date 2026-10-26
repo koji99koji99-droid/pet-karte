@@ -3,12 +3,13 @@ import { readPhoto, extractCandidates } from './ocr.js';
 import { esc, age, karteHtml, karteText } from './karte.js';
 import { weightChart, compareRecords } from './chart.js';
 import { exportBackup, importBackup } from './backup.js';
+import { makeSummary, createShareUrl, formatCreated, emergencyCardHtml, emergencyCardText } from './share.js';
 
 const app = document.querySelector('#app');
 const toastBox = document.querySelector('#toast');
 const updateBanner = document.querySelector('#update-banner');
 const updateButton = document.querySelector('#update-button');
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const typeNames = { checkup: '健康診断', vaccine: 'ワクチン', visit: '通院', medication: '投薬', weight: '体重' };
 const testNames = ['BUN', 'CRE', 'ALT', 'ALP', 'GLU', 'TP', 'ALB', 'WBC', 'RBC', 'HCT', 'PLT'];
 function recall(key) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -23,6 +24,21 @@ let imageUrls = [];
 let hasUnsavedInput = false;
 let updateRequested = false;
 let serviceWorkerRegistration = null;
+let qrScriptPromise;
+let currentShareUrl = '';
+
+function loadQr() {
+  if (window.qrcode) return Promise.resolve(window.qrcode);
+  if (!qrScriptPromise) qrScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
+    script.crossOrigin = 'anonymous';
+    script.onload = () => window.qrcode ? resolve(window.qrcode) : reject(new Error('QRを読み込めませんでした。'));
+    script.onerror = () => reject(new Error('QRを読み込めませんでした。'));
+    document.head.append(script);
+  }).catch(error => { qrScriptPromise = null; throw error; });
+  return qrScriptPromise;
+}
 
 const today = () => new Date().toLocaleDateString('sv-SE');
 const dayOffset = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString('sv-SE'); };
@@ -97,7 +113,7 @@ async function renderHome() {
   const petCards = pets.map(p => `<button type="button" class="pet-card${p.id === pet.id ? ' selected' : ''}" data-action="select-pet" data-id="${esc(p.id)}" aria-pressed="${p.id === pet.id}">${p.photoId ? `<img data-photo-id="${esc(p.photoId)}" alt="${esc(p.name)}の写真">` : '<span class="pet-placeholder" aria-hidden="true">🐾</span>'}<span><strong>${esc(p.name)}</strong>${esc(age(p.birthDate, p.birthEstimated))}<br><small>${esc(p.kind)}</small></span></button>`).join('');
   return basePage('ホーム', `<div class="stack">
     <section><h2>家族を選ぶ</h2><div class="pet-list">${petCards}</div><div class="button-row"><a class="button" href="#pet/new">＋ ペットを追加</a><a class="button" href="#pet/edit/${encodeURIComponent(pet.id)}">${esc(pet.name)}の情報を編集</a></div></section>
-    <section class="card hero"><h2>${esc(pet.name)}のカルテ</h2><p>病院で見せる情報を1画面にまとめます。</p><a class="button primary large full" href="#karte">🩺 獣医さんに見せる</a></section>
+    <section class="card hero"><h2>${esc(pet.name)}のカルテ</h2><p>病院で見せる情報を1画面にまとめます。</p><a class="button primary large full" href="#karte">🩺 獣医さんに見せる</a><a class="button full" href="#emergency">🆘 緊急カード</a></section>
     <section class="card"><h2>お知らせ</h2>${notices.length ? notices.map(n => `<p class="notice ${n.days < 0 ? 'overdue' : 'soon'}">${esc(n.title)}：${esc(n.date)}（${n.days < 0 ? '期限を過ぎています' : n.days === 0 ? '今日' : `あと${n.days}日`}）</p>`).join('') : '<p class="empty">30日以内の予定はありません。</p>'}</section>
     <section class="card"><h2>すぐに記録</h2><div class="actions"><a class="button" href="#record/new/visit">＋ 通院</a><a class="button" href="#record/new/vaccine">＋ ワクチン</a><a class="button" href="#record/new/checkup">＋ 健康診断</a><a class="button" href="#record/new/weight">＋ 体重</a></div><div class="button-row"><a class="button full" href="#photo">📷 写真から入力</a><a class="button full" href="#record/new/medication">＋ 投薬</a></div></section>
     <section><div class="page-head"><h2>最近の記録</h2><a href="#timeline">すべて見る</a></div><div class="stack">${records.sort((a,b) => compareRecords(b,a)).slice(0,3).map(recordCard).join('') || '<p class="empty">まだ記録はありません。</p>'}</div></section>
@@ -199,7 +215,41 @@ async function renderKarte() {
   const pet = await chosenPet();
   if (!pet) return basePage('カルテ', '<a class="button" href="#pet/new">ペットを登録</a>');
   const records = await recordsFor(pet.id);
-  return basePage('獣医さんに見せる', `<div class="button-row no-print"><button type="button" class="primary" data-action="print">印刷 / PDF保存</button><button type="button" data-action="copy-karte">テキストでコピー</button></div>${karteHtml(pet,records)}<div class="button-row no-print"><a class="button" href="#home">ホームへ</a></div>`, `${esc(pet.name)}のカルテ`);
+  return basePage('獣医さんに見せる', `<div class="button-row no-print"><button type="button" class="primary" data-action="print">印刷 / PDF保存</button><button type="button" data-action="copy-karte">テキストでコピー</button><a class="button" href="#qr/karte">📱 QRで渡す</a></div>${karteHtml(pet,records)}<div class="button-row no-print"><a class="button" href="#home">ホームへ</a></div>`, `${esc(pet.name)}のカルテ`);
+}
+
+async function renderEmergency() {
+  const pet = await chosenPet();
+  if (!pet) return basePage('緊急カード', '<a class="button primary" href="#pet/new">ペットを登録する</a>');
+  return basePage('🆘 緊急カード', `<div class="button-row no-print"><a class="button primary" href="#qr/emergency">📱 QRで渡す</a><button type="button" data-action="print">印刷する</button></div>${emergencyCardHtml(pet, pet.photoId)}<div class="button-row no-print"><a class="button" href="#home">ホームへ</a></div>`, `${esc(pet.name)}の緊急情報`);
+}
+
+async function renderQr(kind, token) {
+  if (!['karte', 'emergency'].includes(kind)) return basePage('ページが見つかりません', '<a href="#home">ホームへ</a>');
+  const pet = await chosenPet();
+  if (!pet) return basePage('QRで渡す', '<a class="button primary" href="#pet/new">ペットを登録する</a>');
+  const summary = makeSummary(pet, kind === 'karte' ? await recordsFor(pet.id) : [], kind);
+  const result = await createShareUrl(summary, new URL('view.html', location.href));
+  if (token === renderToken) currentShareUrl = result.url;
+  return basePage('📱 QRで渡す', `<div class="qr-page"><p>このQRには${esc(pet.name)}の健康情報が入っています。見せる相手を選んでください。</p><p>作成：${esc(formatCreated(result.summary.createdAt))}</p><div id="qr-image" class="qr-image" role="img" aria-label="共有用QRコード"><p class="loading">QRを準備しています…</p></div><p id="qr-status" class="hint" role="status"></p><div class="button-row"><button type="button" data-action="copy-link">リンクをコピー</button><button type="button" data-action="copy-karte">テキストでコピー</button></div><a class="button full" href="#${kind === 'karte' ? 'karte' : 'emergency'}">戻る</a></div>`, `${esc(pet.name)}の${kind === 'karte' ? 'カルテ' : '緊急カード'}`);
+}
+
+async function drawQr(url, token) {
+  const box = document.querySelector('#qr-image');
+  const status = document.querySelector('#qr-status');
+  try {
+    const qrcode = await loadQr();
+    if (token !== renderToken || !box?.isConnected) return;
+    const qr = qrcode(0, 'L');
+    qr.addData(url);
+    qr.make();
+    box.innerHTML = qr.createSvgTag(4, 16);
+    status.textContent = '獣医さんのスマホで読み取ってください。';
+  } catch {
+    if (token !== renderToken || !box?.isConnected) return;
+    box.textContent = 'QRコードを表示できません。';
+    status.textContent = '通信できる場所でお試しください。テキストでコピーも使えます。';
+  }
 }
 
 async function renderPhoto() {
@@ -215,7 +265,7 @@ async function renderPhoto() {
 }
 
 function renderSettings() {
-  return basePage('設定・バックアップ', `<div class="stack"><section class="card"><h2>バックアップ</h2><p>写真を含むすべてのデータを1つのJSONファイルに保存します。機種変更前に書き出してください。</p><button type="button" class="button full" data-action="export">バックアップを書き出す</button><div class="field backup-import"><label for="backup-file">バックアップを読み込む</label><input id="backup-file" type="file" accept="application/json,.json"></div><p class="hint">読み込み時は現在の全データを置き換えます。</p></section>
+  return basePage('設定・バックアップ', `<div class="stack"><section class="card"><h2>緊急時に使う</h2><a class="button full" href="#emergency">🆘 緊急カード</a></section><section class="card"><h2>バックアップ</h2><p>写真を含むすべてのデータを1つのJSONファイルに保存します。機種変更前に書き出してください。</p><button type="button" class="button full" data-action="export">バックアップを書き出す</button><div class="field backup-import"><label for="backup-file">バックアップを読み込む</label><input id="backup-file" type="file" accept="application/json,.json"></div><p class="hint">読み込み時は現在の全データを置き換えます。</p></section>
     <section class="card"><h2>動作確認</h2><p>MIX犬「くーちゃん」のサンプル記録を追加・更新します。</p><button type="button" class="button full" data-action="sample">サンプルデータを入れる</button></section>
     <section class="card"><h2>データの削除</h2><p>この端末のペット・記録・写真をすべて削除します。</p><button type="button" class="danger full" data-action="clear-all">全データを消す</button></section>
     <p class="hint">データはこの端末のブラウザ内にだけ保存されます。バックアップファイルには個人情報と写真が含まれます。</p><small class="app-version">バージョン ${APP_VERSION}</small></div>`, 'この端末のデータ');
@@ -223,6 +273,7 @@ function renderSettings() {
 
 async function render() {
   const token = ++renderToken;
+  currentShareUrl = '';
   clearImages();
   const path = decodeURIComponent(location.hash.slice(1) || 'home').split('/');
   let html;
@@ -235,6 +286,8 @@ async function render() {
     else if (path[0] === 'detail') html = await renderDetail(path[1]);
     else if (path[0] === 'chart') html = await renderChart();
     else if (path[0] === 'karte') html = await renderKarte();
+    else if (path[0] === 'emergency') html = await renderEmergency();
+    else if (path[0] === 'qr') html = await renderQr(path[1], token);
     else if (path[0] === 'photo') html = await renderPhoto();
     else if (path[0] === 'settings') html = renderSettings();
     else html = basePage('ページが見つかりません','<a class="button" href="#home">ホームへ</a>');
@@ -242,6 +295,7 @@ async function render() {
     app.innerHTML = html;
     hasUnsavedInput = false;
     await fillImages();
+    if (path[0] === 'qr' && currentShareUrl) drawQr(currentShareUrl, token);
     if (path[0] === 'record' && path[1] === 'new') updateNewPhotos();
     window.scrollTo(0,0);
   } catch (error) {
@@ -450,9 +504,11 @@ app.addEventListener('click', async event => {
     if (action === 'print') window.print();
     if (action === 'copy-karte') {
       const pet = await chosenPet();
-      await navigator.clipboard.writeText(karteText(pet,await recordsFor(pet.id)));
-      toast('カルテをテキストでコピーしました。');
+      const emergency = location.hash === '#qr/emergency';
+      await navigator.clipboard.writeText(emergency ? emergencyCardText(pet) : karteText(pet,await recordsFor(pet.id)));
+      toast(`${emergency ? '緊急カード' : 'カルテ'}をテキストでコピーしました。`);
     }
+    if (action === 'copy-link' && currentShareUrl) { await navigator.clipboard.writeText(currentShareUrl); toast('共有リンクをコピーしました。'); }
     if (action === 'export') { await exportBackup(); toast('バックアップを書き出しました。'); }
     if (action === 'sample') { button.disabled = true; try { await addSample(); } finally { button.disabled = false; } }
     if (action === 'clear-all') {
@@ -464,7 +520,7 @@ app.addEventListener('click', async event => {
 });
 
 window.addEventListener('hashchange',render);
-window.addEventListener('beforeprint', () => { if (!location.hash.startsWith('#karte')) toast('カルテ画面で印刷してください。'); });
+window.addEventListener('beforeprint', () => { if (!['#karte', '#emergency'].includes(location.hash)) toast('カルテか緊急カードの画面で印刷してください。'); });
 function showWaitingUpdate(registration) {
   if (registration.waiting && navigator.serviceWorker.controller) updateBanner.classList.remove('hide');
 }

@@ -43,11 +43,35 @@ export function extractCandidates(text) {
   const lines = String(text ?? '').normalize('NFKC').split(/\r?\n/);
   const normalized = lines.join('\n');
   const weight = normalized.match(new RegExp(`体重\\s*[:：]?\\s*(${NUMBER})\\s*kg\\b`, 'i'))?.[1] || '';
-  const temperature = normalized.match(new RegExp(`体温\\s*[:：]?\\s*(${NUMBER})\\s*(?:°C|℃)`, 'i'))?.[1] || '';
+  const temperature = extractTemperature(lines);
   return {
-    date: extractDate(lines), weight: numberValue(weight), temperature: numberValue(temperature),
+    date: extractDate(lines), weight: numberValue(weight), temperature,
     tests: extractTests(lines), vaccine: extractVaccine(lines)
   };
+}
+
+function extractTemperature(lines) {
+  const unit = '(?:[°oº"]?C|度)';
+  const labeled = new RegExp(`(?:体温|(?<![A-Za-z])BT(?![A-Za-z])|(?<![A-Za-z])T(?![A-Za-z-]))\\s*[:：]?\\s*(${NUMBER})(?![\\d,.])\\s*(${unit}|[°oº"]?F)?`, 'gi');
+  const withUnit = new RegExp(`(${NUMBER})(?![\\d,.])\\s*(${unit})`, 'gi');
+  const valid = match => {
+    if (!match || /F$/i.test(match[2] || '')) return '';
+    const value = numberValue(match[1]);
+    return Number(value) >= 30 && Number(value) <= 43 ? value : '';
+  };
+  for (const line of lines) {
+    for (const match of line.matchAll(labeled)) {
+      const value = valid(match);
+      if (value) return value;
+    }
+  }
+  for (const line of lines) {
+    for (const match of line.matchAll(withUnit)) {
+      const value = valid(match);
+      if (value) return value;
+    }
+  }
+  return '';
 }
 
 function numberValue(value) {
