@@ -3,13 +3,14 @@ import { readPhoto, extractCandidates } from './ocr.js';
 import { esc, age, karteHtml, karteText } from './karte.js';
 import { weightChart, compareRecords } from './chart.js';
 import { exportBackup, importBackup } from './backup.js';
-import { makeSummary, createShareUrl, formatCreated, emergencyCardHtml, emergencyCardText } from './share.js';
+import { makeSummary, makeTagSummary, createShareUrl, formatCreated, emergencyCardHtml, emergencyCardText, TAG_LIMIT } from './share.js';
+import { chipNotices, moveItemsFor } from './move.js';
 
 const app = document.querySelector('#app');
 const toastBox = document.querySelector('#toast');
 const updateBanner = document.querySelector('#update-banner');
 const updateButton = document.querySelector('#update-button');
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const typeNames = { checkup: '健康診断', vaccine: 'ワクチン', visit: '通院', medication: '投薬', weight: '体重' };
 const testNames = ['BUN', 'CRE', 'ALT', 'ALP', 'GLU', 'TP', 'ALB', 'WBC', 'RBC', 'HCT', 'PLT'];
 function recall(key) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -26,6 +27,8 @@ let updateRequested = false;
 let serviceWorkerRegistration = null;
 let qrScriptPromise;
 let currentShareUrl = '';
+let tagUpdate = 0;
+let tagReady = false;
 
 function loadQr() {
   if (window.qrcode) return Promise.resolve(window.qrcode);
@@ -56,7 +59,7 @@ function toast(message) {
 function go(route) { location.hash = route; }
 function field(label, name, value = '', opts = {}) {
   const id = `f-${name}`;
-  const attrs = `${opts.required ? ' required' : ''}${opts.min != null ? ` min="${opts.min}"` : ''}${opts.step ? ` step="${opts.step}"` : ''}`;
+  const attrs = `${opts.required ? ' required' : ''}${opts.min != null ? ` min="${opts.min}"` : ''}${opts.step ? ` step="${opts.step}"` : ''}${opts.maxlength ? ` maxlength="${opts.maxlength}"` : ''}`;
   let control;
   if (opts.options) control = `<select id="${id}" name="${name}"${attrs}>${opts.options.map(([v, text]) => `<option value="${esc(v)}"${String(value) === String(v) ? ' selected' : ''}>${esc(text)}</option>`).join('')}</select>`;
   else if (opts.textarea) control = `<textarea id="${id}" name="${name}" rows="3">${esc(value)}</textarea>`;
@@ -110,11 +113,12 @@ async function renderHome() {
     if (days > 30) return [];
     return [{ date, days, title: r.type === 'vaccine' ? `${r.vaccineName || 'ワクチン'}の次回予定` : '次回の通院予約' }];
   }).sort((a, b) => a.days - b.days);
+  const registrationNotices = chipNotices(pet);
   const petCards = pets.map(p => `<button type="button" class="pet-card${p.id === pet.id ? ' selected' : ''}" data-action="select-pet" data-id="${esc(p.id)}" aria-pressed="${p.id === pet.id}">${p.photoId ? `<img data-photo-id="${esc(p.photoId)}" alt="${esc(p.name)}の写真">` : '<span class="pet-placeholder" aria-hidden="true">🐾</span>'}<span><strong>${esc(p.name)}</strong>${esc(age(p.birthDate, p.birthEstimated))}<br><small>${esc(p.kind)}</small></span></button>`).join('');
   return basePage('ホーム', `<div class="stack">
     <section><h2>家族を選ぶ</h2><div class="pet-list">${petCards}</div><div class="button-row"><a class="button" href="#pet/new">＋ ペットを追加</a><a class="button" href="#pet/edit/${encodeURIComponent(pet.id)}">${esc(pet.name)}の情報を編集</a></div></section>
-    <section class="card hero"><h2>${esc(pet.name)}のカルテ</h2><p>病院で見せる情報を1画面にまとめます。</p><a class="button primary large full" href="#karte">🩺 獣医さんに見せる</a><a class="button full" href="#emergency">🆘 緊急カード</a></section>
-    <section class="card"><h2>お知らせ</h2>${notices.length ? notices.map(n => `<p class="notice ${n.days < 0 ? 'overdue' : 'soon'}">${esc(n.title)}：${esc(n.date)}（${n.days < 0 ? '期限を過ぎています' : n.days === 0 ? '今日' : `あと${n.days}日`}）</p>`).join('') : '<p class="empty">30日以内の予定はありません。</p>'}</section>
+    <section class="card hero"><h2>${esc(pet.name)}のカルテ</h2><p>病院で見せる情報を1画面にまとめます。</p><a class="button primary large full" href="#karte">🩺 獣医さんに見せる</a><a class="button full" href="#emergency">🆘 緊急カード</a><a class="button full" href="#lost-tag">🏷 迷子タグ</a><a class="button full" href="#moving">📦 引っ越しチェック</a></section>
+    <section class="card"><h2>お知らせ</h2>${registrationNotices.map(n => `<a class="notice soon notice-link" href="#chip-guide">${esc(n)}</a>`).join('')}${notices.length ? notices.map(n => `<p class="notice ${n.days < 0 ? 'overdue' : 'soon'}">${esc(n.title)}：${esc(n.date)}（${n.days < 0 ? '期限を過ぎています' : n.days === 0 ? '今日' : `あと${n.days}日`}）</p>`).join('') : registrationNotices.length ? '' : '<p class="empty">30日以内の予定はありません。</p>'}</section>
     <section class="card"><h2>すぐに記録</h2><div class="actions"><a class="button" href="#record/new/visit">＋ 通院</a><a class="button" href="#record/new/vaccine">＋ ワクチン</a><a class="button" href="#record/new/checkup">＋ 健康診断</a><a class="button" href="#record/new/weight">＋ 体重</a></div><div class="button-row"><a class="button full" href="#photo">📷 写真から入力</a><a class="button full" href="#record/new/medication">＋ 投薬</a></div></section>
     <section><div class="page-head"><h2>最近の記録</h2><a href="#timeline">すべて見る</a></div><div class="stack">${records.sort((a,b) => compareRecords(b,a)).slice(0,3).map(recordCard).join('') || '<p class="empty">まだ記録はありません。</p>'}</div></section>
   </div>`, `${esc(pet.name)}の健康記録`);
@@ -134,6 +138,8 @@ async function renderPetForm(id) {
     ${field('家族になった日', 'joinedDate', pet?.joinedDate, { type: 'date' })}
     ${field('毛色・特徴', 'features', pet?.features, { textarea: true })}
     ${field('マイクロチップ番号', 'microchip', pet?.microchip)}
+    ${field('国（環境省）への登録', 'chipRegistration', pet?.chipRegistration || '分からない', { options: [['済み','済み'],['まだ','まだ'],['分からない','分からない']] })}
+    ${field('登録内容を最後に確かめた日', 'chipCheckedAt', pet?.chipCheckedAt, { type: 'date' })}
     <div class="field"><label for="pet-photo">写真</label><input id="pet-photo" type="file" accept="image/*"><small>長辺1600pxに縮小して保存します。</small></div>
     ${pet?.photoId ? `<div class="photo-grid"><figure><img data-photo-id="${esc(pet.photoId)}" alt="現在のペット写真"></figure></div>` : ''}
     <fieldset class="form-section"><legend>獣医さんに伝えること</legend>
@@ -221,7 +227,68 @@ async function renderKarte() {
 async function renderEmergency() {
   const pet = await chosenPet();
   if (!pet) return basePage('緊急カード', '<a class="button primary" href="#pet/new">ペットを登録する</a>');
-  return basePage('🆘 緊急カード', `<div class="button-row no-print"><a class="button primary" href="#qr/emergency">📱 QRで渡す</a><button type="button" data-action="print">印刷する</button></div>${emergencyCardHtml(pet, pet.photoId)}<div class="button-row no-print"><a class="button" href="#home">ホームへ</a></div>`, `${esc(pet.name)}の緊急情報`);
+  return basePage('🆘 緊急カード', `<div class="button-row no-print"><a class="button primary" href="#qr/emergency">📱 QRで渡す</a><button type="button" data-action="print">印刷する</button><a class="button" href="#lost-tag">🏷 迷子タグ</a></div>${emergencyCardHtml(pet, pet.photoId)}<div class="button-row no-print"><a class="button" href="#home">ホームへ</a></div>`, `${esc(pet.name)}の緊急情報`);
+}
+
+function tagCard(summary, qrSvg) {
+  const pet = summary.pet;
+  return `<article class="lost-tag-card"><strong class="tag-title">迷子かもしれません</strong>${pet.name ? `<strong class="tag-name">${esc(pet.name)}</strong>` : ''}${pet.hasChip ? '<span class="tag-chip">マイクロチップあり</span>' : ''}<div class="tag-qr" aria-label="迷子タグのQRコード">${qrSvg}</div><span class="tag-instruction">近くの動物病院・交番・動物愛護センターに連れて行ってください</span>${summary.contact ? `<span class="tag-contact">${esc(summary.contact)}</span>` : ''}</article>`;
+}
+
+async function renderLostTag() {
+  const pet = await chosenPet();
+  if (!pet) return basePage('🏷 迷子タグ', '<a class="button primary" href="#pet/new">ペットを登録する</a>');
+  return basePage('🏷 迷子タグ', `<div class="stack"><section class="card no-print"><p>首輪やハーネスに付けるタグです。飼い主の連絡先やマイクロチップ番号は、既定では載せません。</p><label class="checkline"><input id="tag-show-name" type="checkbox" checked> ペットの名前を載せる</label><label class="checkline"><input id="tag-show-contact" type="checkbox"> タグに連絡先を載せる（上級者向け）</label><div id="tag-contact-area" class="hide">${field('タグに載せる連絡先', 'tagContact', '', { maxlength: 60 })}<p class="hint">ペット専用に作ったメールアドレスなど、知られても困らない連絡先をおすすめします。電話番号や住所は載せないでください。</p><p id="tag-phone-warning" class="notice overdue hide" role="alert">電話番号らしい値が含まれています。公開してよいか確かめてください。</p></div></section><section class="card tag-preview-section"><h2 class="no-print">印刷プレビュー</h2><div id="tag-preview" class="tag-preview"><p>QRを準備しています…</p></div><p id="tag-status" class="hint no-print" role="status"></p><button id="tag-print" type="button" class="primary no-print" data-action="print-tag" disabled>A4に複数枚印刷する</button></section><div id="tag-print-sheet" class="tag-print-sheet" aria-hidden="true"></div><p class="hint no-print">印刷した紙を切り取り、QRが読み取れるか確かめてください。</p></div>`, `${esc(pet.name)}のタグ`);
+}
+
+async function updateTagPreview() {
+  const token = ++tagUpdate;
+  const pageToken = renderToken;
+  const box = document.querySelector('#tag-preview');
+  if (!box) return;
+  const status = document.querySelector('#tag-status');
+  const print = document.querySelector('#tag-print');
+  const sheet = document.querySelector('#tag-print-sheet');
+  const showContact = document.querySelector('#tag-show-contact').checked;
+  const contact = document.querySelector('#f-tagContact').value;
+  document.querySelector('#tag-contact-area').classList.toggle('hide', !showContact);
+  document.querySelector('#tag-phone-warning').classList.toggle('hide', !showContact || contact.replace(/\D/g, '').length < 10);
+  print.disabled = true;
+  tagReady = false;
+  box.textContent = 'QRを準備しています…';
+  sheet.innerHTML = '';
+  try {
+    const pet = await chosenPet();
+    const summary = makeTagSummary(pet, { showName: document.querySelector('#tag-show-name').checked, showContact, contact });
+    const result = await createShareUrl(summary, new URL('view.html', location.href), TAG_LIMIT);
+    const qrcode = await loadQr();
+    if (token !== tagUpdate || pageToken !== renderToken || !box.isConnected) return;
+    const qr = qrcode(0, 'L');
+    qr.addData(result.url); qr.make();
+    const card = tagCard(result.summary, qr.createSvgTag(4, 4));
+    box.innerHTML = card;
+    sheet.innerHTML = Array.from({ length: 24 }, () => card).join('');
+    status.textContent = `QRリンク：${result.url.length}文字。印刷後に読み取りを確かめてください。${result.summary.pet.features || !pet.features ? '' : '毛色・特徴を省略しました。'}${result.summary.pet.allergies || !pet.allergies ? '' : 'アレルギーを省略しました。'}`;
+    tagReady = true;
+    print.disabled = false;
+  } catch (error) {
+    if (token !== tagUpdate || pageToken !== renderToken || !box.isConnected) return;
+    box.textContent = '迷子タグを表示できません。';
+    sheet.innerHTML = '';
+    status.textContent = error.message || 'QRを読み込めませんでした。';
+  }
+}
+
+function renderChipGuide() {
+  return basePage('マイクロチップ登録と引っ越し', `<section class="card"><p>マイクロチップには番号だけが入っています。飼い主の情報は国（環境省）の登録制度で管理されていて、迷子が見つかったとき、自治体などが番号から飼い主を調べます。</p><p>住所や電話番号が変わったら、30日以内に変更の届出が必要です。くわしくは環境省のページで確かめてください。</p><a class="button full" href="https://www.env.go.jp/nature/dobutsu/aigo/pickup/chip.html" target="_blank" rel="noopener noreferrer">環境省のマイクロチップ情報登録</a></section><div class="button-row"><a class="button" href="#moving">📦 引っ越しチェック</a><a class="button" href="#home">ホームへ</a></div>`, '登録内容を確かめましょう');
+}
+
+async function renderMoving() {
+  const pet = await chosenPet();
+  if (!pet) return basePage('📦 引っ越しチェック', '<a class="button primary" href="#pet/new">ペットを登録する</a>');
+  const items = moveItemsFor(pet);
+  const done = Array.isArray(pet.moveChecklist) ? pet.moveChecklist : [];
+  return basePage('📦 引っ越しチェック', `<section class="card"><p>${esc(pet.name)}の引っ越し準備を、この端末に記録します。</p><div class="move-list">${items.map(([id, label]) => `<div class="move-row"><label class="checkline"><input type="checkbox" data-move-id="${id}" ${done.includes(id) ? 'checked' : ''}> ${esc(label)}</label>${id === 'chip' ? '<a href="#chip-guide">登録について確認する</a>' : ''}${id === 'karte' ? '<a href="#karte">カルテを開く</a>' : ''}${id === 'tag' ? '<a href="#lost-tag">迷子タグを開く</a>' : ''}${id === 'backup' ? '<a href="#settings">バックアップへ</a>' : ''}</div>`).join('')}</div><p id="move-complete" class="status ${items.every(([id]) => done.includes(id)) ? '' : 'hide'}">おつかれさまでした</p><button type="button" class="danger" data-action="reset-moving">チェックをリセット</button></section>`, `${esc(pet.name)}の準備`);
 }
 
 async function renderQr(kind, token) {
@@ -265,7 +332,7 @@ async function renderPhoto() {
 }
 
 function renderSettings() {
-  return basePage('設定・バックアップ', `<div class="stack"><section class="card"><h2>緊急時に使う</h2><a class="button full" href="#emergency">🆘 緊急カード</a></section><section class="card"><h2>バックアップ</h2><p>写真を含むすべてのデータを1つのJSONファイルに保存します。機種変更前に書き出してください。</p><button type="button" class="button full" data-action="export">バックアップを書き出す</button><div class="field backup-import"><label for="backup-file">バックアップを読み込む</label><input id="backup-file" type="file" accept="application/json,.json"></div><p class="hint">読み込み時は現在の全データを置き換えます。</p></section>
+  return basePage('設定・バックアップ', `<div class="stack"><section class="card"><h2>緊急時に使う</h2><a class="button full" href="#emergency">🆘 緊急カード</a><a class="button full" href="#lost-tag">🏷 迷子タグ</a><a class="button full" href="#moving">📦 引っ越しチェック</a></section><section class="card"><h2>バックアップ</h2><p>写真を含むすべてのデータを1つのJSONファイルに保存します。機種変更前に書き出してください。</p><button type="button" class="button full" data-action="export">バックアップを書き出す</button><div class="field backup-import"><label for="backup-file">バックアップを読み込む</label><input id="backup-file" type="file" accept="application/json,.json"></div><p class="hint">読み込み時は現在の全データを置き換えます。</p></section>
     <section class="card"><h2>動作確認</h2><p>MIX犬「くーちゃん」のサンプル記録を追加・更新します。</p><button type="button" class="button full" data-action="sample">サンプルデータを入れる</button></section>
     <section class="card"><h2>データの削除</h2><p>この端末のペット・記録・写真をすべて削除します。</p><button type="button" class="danger full" data-action="clear-all">全データを消す</button></section>
     <p class="hint">データはこの端末のブラウザ内にだけ保存されます。バックアップファイルには個人情報と写真が含まれます。</p><small class="app-version">バージョン ${APP_VERSION}</small></div>`, 'この端末のデータ');
@@ -274,6 +341,7 @@ function renderSettings() {
 async function render() {
   const token = ++renderToken;
   currentShareUrl = '';
+  tagReady = false;
   clearImages();
   const path = decodeURIComponent(location.hash.slice(1) || 'home').split('/');
   let html;
@@ -287,6 +355,9 @@ async function render() {
     else if (path[0] === 'chart') html = await renderChart();
     else if (path[0] === 'karte') html = await renderKarte();
     else if (path[0] === 'emergency') html = await renderEmergency();
+    else if (path[0] === 'lost-tag') html = await renderLostTag();
+    else if (path[0] === 'chip-guide') html = renderChipGuide();
+    else if (path[0] === 'moving') html = await renderMoving();
     else if (path[0] === 'qr') html = await renderQr(path[1], token);
     else if (path[0] === 'photo') html = await renderPhoto();
     else if (path[0] === 'settings') html = renderSettings();
@@ -296,6 +367,7 @@ async function render() {
     hasUnsavedInput = false;
     await fillImages();
     if (path[0] === 'qr' && currentShareUrl) drawQr(currentShareUrl, token);
+    if (path[0] === 'lost-tag') updateTagPreview();
     if (path[0] === 'record' && path[1] === 'new') updateNewPhotos();
     window.scrollTo(0,0);
   } catch (error) {
@@ -346,7 +418,7 @@ async function savePet(form) {
   const old = form.dataset.id ? await get('pets', id) : null;
   const pet = { ...(old || {}), id, name: formValue(form,'name'), kind: formValue(form,'kind'), breed: formValue(form,'breed'), sex: formValue(form,'sex'), neutered: formValue(form,'neutered'),
     birthDate: requireDate(form,'birthDate','生年月日'), birthEstimated: form.elements.birthEstimated.checked, joinedDate: requireDate(form,'joinedDate','家族になった日'),
-    features: formValue(form,'features'), microchip: formValue(form,'microchip'), allergies: formValue(form,'allergies'), history: formValue(form,'history'), medications: formValue(form,'medications'),
+    features: formValue(form,'features'), microchip: formValue(form,'microchip'), chipRegistration: formValue(form,'chipRegistration'), chipCheckedAt: requireDate(form,'chipCheckedAt','登録内容を最後に確かめた日'), allergies: formValue(form,'allergies'), history: formValue(form,'history'), medications: formValue(form,'medications'),
     hospitalName: formValue(form,'hospitalName'), hospitalPhone: formValue(form,'hospitalPhone'), emergencyContact: formValue(form,'emergencyContact'), notes: formValue(form,'notes') };
   if (!pet.name || !pet.kind) throw new Error('名前と種類を入力してください。');
   if (petFile) pet.photoId = await storePhoto(petFile);
@@ -440,10 +512,13 @@ async function addSample() {
 }
 
 function markUnsavedInput(event) {
-  if (event.target.matches('input, select, textarea')) hasUnsavedInput = true;
+  if (event.target.closest('#pet-form, #record-form')) hasUnsavedInput = true;
 }
 app.addEventListener('input', markUnsavedInput);
 app.addEventListener('change', markUnsavedInput);
+app.addEventListener('input', event => {
+  if (['tag-show-name', 'tag-show-contact', 'f-tagContact'].includes(event.target.id)) updateTagPreview();
+});
 
 app.addEventListener('submit', async event => {
   if (!['pet-form','record-form'].includes(event.target.id)) return;
@@ -457,6 +532,15 @@ app.addEventListener('submit', async event => {
 app.addEventListener('change', async event => {
   const target = event.target;
   try {
+    if (['tag-show-name', 'tag-show-contact'].includes(target.id)) updateTagPreview();
+    if (target.dataset.moveId) {
+      const pet = await chosenPet();
+      const done = new Set(Array.isArray(pet.moveChecklist) ? pet.moveChecklist : []);
+      if (target.checked) done.add(target.dataset.moveId); else done.delete(target.dataset.moveId);
+      pet.moveChecklist = [...done];
+      await put('pets', pet);
+      document.querySelector('#move-complete').classList.toggle('hide', !moveItemsFor(pet).every(([id]) => done.has(id)));
+    }
     if (target.id === 'pet-photo') petFile = target.files[0] || null;
     if (target.id === 'record-photo') { recordFiles.push(...[...target.files]); target.value = ''; updateNewPhotos(); }
     if (target.id === 'ocr-photo') await handleOcrFile(target.files[0]);
@@ -502,6 +586,18 @@ app.addEventListener('click', async event => {
       go(`record/new/${button.dataset.type}`);
     }
     if (action === 'print') window.print();
+    if (action === 'print-tag') {
+      if (!tagReady) throw new Error('QRを準備できていません。');
+      const contact = document.querySelector('#tag-show-contact').checked ? document.querySelector('#f-tagContact').value : '';
+      if (contact.replace(/\D/g, '').length >= 10 && !confirm('電話番号らしい値がタグとQRに載ります。印刷しますか？')) return;
+      window.print();
+    }
+    if (action === 'reset-moving') {
+      const pet = await chosenPet();
+      pet.moveChecklist = [];
+      await put('pets', pet);
+      await render();
+    }
     if (action === 'copy-karte') {
       const pet = await chosenPet();
       const emergency = location.hash === '#qr/emergency';
@@ -520,7 +616,7 @@ app.addEventListener('click', async event => {
 });
 
 window.addEventListener('hashchange',render);
-window.addEventListener('beforeprint', () => { if (!['#karte', '#emergency'].includes(location.hash)) toast('カルテか緊急カードの画面で印刷してください。'); });
+window.addEventListener('beforeprint', () => { if (!['#karte', '#emergency', '#lost-tag'].includes(location.hash)) toast('印刷する画面を開いてください。'); });
 function showWaitingUpdate(registration) {
   if (registration.waiting && navigator.serviceWorker.controller) updateBanner.classList.remove('hide');
 }

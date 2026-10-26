@@ -1,6 +1,6 @@
 const CACHE_PREFIX = 'pet-karte-shell-';
-const CACHE = `${CACHE_PREFIX}1.1.0`;
-const SHELL = ['./', './index.html', './view.html', './styles.css', './manifest.webmanifest', './icons/icon.svg', './js/app.js', './js/view.js', './js/share.js', './js/db.js', './js/ocr.js', './js/karte.js', './js/chart.js', './js/backup.js'];
+const CACHE = `${CACHE_PREFIX}1.2.0`;
+const SHELL = ['./', './index.html', './view.html', './styles.css', './manifest.webmanifest', './icons/icon.svg', './js/app.js', './js/view.js', './js/share.js', './js/move.js', './js/db.js', './js/ocr.js', './js/karte.js', './js/chart.js', './js/backup.js'];
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const oldCaches = await caches.keys();

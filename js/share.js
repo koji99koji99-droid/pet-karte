@@ -2,6 +2,9 @@ import { compareRecords } from './chart.js';
 import { esc, karteHtml, show } from './karte.js';
 
 export const SHARE_LIMIT = 1800;
+export const TAG_LIMIT = 600;
+const TAG_GUIDE = 'このペットは迷子かもしれません。近くの動物病院・交番・動物愛護センターに連れて行ってください。';
+const CHIP_GUIDE = 'マイクロチップが入っている場合、そこで飼い主を調べてもらえます。';
 const MAX_JSON_BYTES = 200 * 1024;
 const PET_FIELDS = ['name', 'kind', 'breed', 'sex', 'neutered', 'birthDate', 'features', 'microchip', 'allergies', 'history', 'medications', 'hospitalName', 'hospitalPhone', 'emergencyContact'];
 const pick = (source, keys) => Object.fromEntries(keys.map(key => [key, String(source?.[key] ?? '')]));
@@ -23,6 +26,17 @@ export function makeSummary(pet, records = [], kind = 'karte', createdAt = new D
   summary.checkup = checkup ? { ...pick(checkup, ['date', 'hospital']), tests: checkup.tests.map(t => pick(t, ['name', 'value', 'unit', 'low', 'high'])) } : null;
   const weight = sorted.find(r => ['checkup', 'weight'].includes(r.type) && Number(r.weight) > 0);
   summary.latestWeight = weight ? { date: String(weight.date), weight: String(weight.weight) } : null;
+  return summary;
+}
+
+export function makeTagSummary(pet, { showName = true, showContact = false, contact = '' } = {}) {
+  const hasChip = Boolean(String(pet.microchip || '').trim());
+  const summary = { v: 1, kind: 'tag', pet: {
+    name: showName ? String(pet.name || '') : '',
+    kind: String(pet.kind || ''), features: String(pet.features || ''),
+    hasChip, allergies: String(pet.allergies || '')
+  }, guide: TAG_GUIDE + (hasChip ? CHIP_GUIDE : '') };
+  if (showContact && String(contact).trim()) summary.contact = String(contact).trim();
   return summary;
 }
 
@@ -72,6 +86,16 @@ function stringFields(object, keys) {
 }
 function date(value) { return /^\d{4}-\d{2}-\d{2}$/.test(value); }
 export function validateSummary(data) {
+  if (data?.kind === 'tag') {
+    const keys = Object.keys(data);
+    const petKeys = data.pet && typeof data.pet === 'object' ? Object.keys(data.pet) : [];
+    if (data.v !== 1 || keys.some(key => !['v', 'kind', 'pet', 'guide', 'contact'].includes(key)) ||
+        !stringFields(data.pet, ['name', 'kind', 'features', 'allergies']) || typeof data.pet.hasChip !== 'boolean' ||
+        petKeys.some(key => !['name', 'kind', 'features', 'allergies', 'hasChip'].includes(key)) ||
+        data.guide !== TAG_GUIDE + (data.pet.hasChip ? CHIP_GUIDE : '') ||
+        (data.contact !== undefined && typeof data.contact !== 'string')) throw new Error('共有データの形式が正しくありません。');
+    return data;
+  }
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.v !== 1 || !['karte', 'emergency'].includes(data.kind) ||
       typeof data.createdAt !== 'string' || !Number.isFinite(Date.parse(data.createdAt)) ||
       !stringFields(data.pet, PET_FIELDS) || typeof data.pet.birthEstimated !== 'boolean' || typeof data.omitted !== 'boolean') throw new Error('共有データの形式が正しくありません。');
@@ -89,6 +113,16 @@ export async function createShareUrl(summary, baseUrl, maxLength = SHARE_LIMIT) 
   const data = structuredClone(summary);
   const url = new URL(baseUrl);
   url.hash = '';
+  if (data.kind === 'tag') {
+    for (const key of ['features', 'allergies']) {
+      const link = `${url.href}#d=${await encodeSummary(data)}`;
+      if (link.length <= maxLength) return { url: link, summary: data };
+      data.pet[key] = '';
+    }
+    const link = `${url.href}#d=${await encodeSummary(data)}`;
+    if (link.length <= maxLength) return { url: link, summary: data };
+    throw new Error('迷子タグのQRに収まりません。連絡先などを短くしてください。');
+  }
   for (let attempt = 0; attempt < 1000; attempt++) {
     const link = `${url.href}#d=${await encodeSummary(data)}`;
     if (link.length <= maxLength) return { url: link, summary: data };
@@ -122,6 +156,10 @@ export function emergencyCardText(pet) {
 
 export function renderSharedHtml(summary) {
   validateSummary(summary);
+  if (summary.kind === 'tag') {
+    const pet = summary.pet;
+    return `<article class="found-pet"><h1>迷子のペットを見つけた方へ</h1>${pet.name ? `<h2>${esc(pet.name)}</h2>` : ''}<p><strong>種類：</strong>${show(pet.kind)}</p>${pet.features ? `<p><strong>毛色・特徴：</strong>${esc(pet.features)}</p>` : ''}${pet.hasChip ? '<p><strong>マイクロチップあり</strong></p>' : ''}${pet.allergies ? `<p><strong>アレルギー：</strong>${esc(pet.allergies)}</p>` : ''}<p class="found-guide">${esc(summary.guide)}</p>${summary.contact ? `<p><strong>公開された連絡先：</strong>${esc(summary.contact)}</p>` : ''}</article>`;
+  }
   const header = `<h1>飼い主から共有された健康カルテ（閲覧専用）</h1><p class="karte-updated">作成：${esc(formatCreated(summary.createdAt))}</p>`;
   const notice = summary.omitted ? '<p class="notice soon">一部省略：全体は飼い主のスマホでご確認ください</p>' : '';
   if (summary.kind === 'emergency') return `${header}${notice}${emergencyCardHtml(summary.pet)}<p class="disclaimer">飼い主による記録です。診断は獣医師の判断を優先してください。</p>`;

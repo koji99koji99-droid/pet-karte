@@ -44,7 +44,7 @@ export function karteHtml(pet, records, { visitLimit = 5 } = {}) {
       const highOut = t.high !== '' && t.high != null && Number.isFinite(n) && Number.isFinite(high) && n > high;
       return `<tr><td>${show(t.name)}</td><td class="${lowOut || highOut ? 'out-of-range' : ''}">${show(t.value)} ${show(t.unit) === '未登録' ? '' : show(t.unit)} ${lowOut ? '↓' : highOut ? '↑' : ''}</td><td>${t.low !== '' && t.low != null ? esc(t.low) : '―'} ～ ${t.high !== '' && t.high != null ? esc(t.high) : '―'}</td></tr>`;
     }).join('')}</tbody></table></div>` : '<p class="empty">検査値の記録はありません。</p>'}</section>
-    <section class="karte-block"><h3>体重推移</h3><p>最新：${latestWeight ? `${esc(latestWeight.weight)} kg（${esc(latestWeight.date)}）` : '未登録'}</p>${weightChart(records)}</section>
+    <section class="karte-block"><h3>体重推移</h3>${records.filter(r => ['checkup', 'weight'].includes(r.type) && Number(r.weight) > 0).length === 1 ? '' : `<p>最新：${latestWeight ? `${esc(latestWeight.weight)} kg（${esc(latestWeight.date)}）` : '未登録'}</p>`}${weightChart(records)}</section>
     <section class="karte-block"><h3>病院・連絡先</h3><p>かかりつけ：${show(pet.hospitalName)}（電話：${show(pet.hospitalPhone)}）</p><p>受診した病院：${hospitals.length ? hospitals.map(esc).join('、') : '未登録'}</p><p>飼い主の緊急連絡先：${show(pet.emergencyContact)}</p></section>
     <p class="disclaimer">飼い主による記録です。診断は獣医師の判断を優先してください。</p>
   </article>`;
