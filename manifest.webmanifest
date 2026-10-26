@@ -1,0 +1,1 @@
+{"name":"ペット健康カルテ","short_name":"ペットカルテ","description":"ペットの健康記録を手元に残すカルテ","start_url":"./","scope":"./","display":"standalone","background_color":"#fffaf3","theme_color":"#f5e8d5","icons":[{"src":"./icons/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
